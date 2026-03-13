@@ -22,7 +22,7 @@ class GrokSearchPlugin(BasePlugin):
 
     config_section_descriptions = {
         "plugin": "插件基础信息",
-        "model": "搜索模型配置（推荐 Grok / Gemini 所在兼容接口）",
+        "model": "搜索模型配置(推荐使用Grok模型)",
         "search": "搜索行为配置",
         "prompt": "提示词配置",
     }
@@ -51,11 +51,6 @@ class GrokSearchPlugin(BasePlugin):
             ),
         },
         "model": {
-            "provider": ConfigField(
-                type=str,
-                default="grok",
-                description="搜索模型提供方标识，例如 grok / gemini"
-            ),
             "base_url": ConfigField(
                 type=str,
                 default="https://api.openai.com/v1",
@@ -64,12 +59,12 @@ class GrokSearchPlugin(BasePlugin):
             "api_key": ConfigField(
                 type=str,
                 default="",
-                description="模型 API Key"
+                description="模型 API 密钥"
             ),
             "model": ConfigField(
                 type=str,
-                default="grok-2-1212",
-                description="用于联网检索总结的模型名称"
+                default="grok-4",
+                description="使用的模型名称"
             ),
             "temperature": ConfigField(
                 type=float,

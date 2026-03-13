@@ -1,27 +1,68 @@
+# 插件基本信息
 [plugin]
+
+# 插件名称
 name = "grok_search_plugin"
+
+# 插件版本
 version = "1.0.0"
-config_version = "1.0.0"
+
+# 是否启用插件
 enabled = true
 
+
+# 模型配置
 [model]
-provider = "grok"
-base_url = "https://api.x.ai/v1"
-api_key = "YOUR_API_KEY"
-model = "grok-4"
+
+# 兼容 OpenAI Chat Completions 的接口地址
+base_url = ""
+
+# 模型 API 密钥
+api_key = ""
+
+# 使用的模型名称
+model = ""
+
+# 生成温度，建议较低以减少事实性问题的发散
 temperature = 0.2
 
+
+# 搜索配置
 [search]
-direction = "请优先关注热点事件、事实准确性、发布时间、版本变更和外部资料的可靠性。"
+
+# 搜索归纳方向，建议强调热点、更新、事实性和时效性
+direction = "请优先关注近期热点、互联网讨论、模型更新、版本变化、公告、新闻和事实准确性。"
+
+# 是否附带最近聊天上下文帮助理解问题
 enable_context = true
+
+# 读取最近多少秒内的聊天记录
 time_gap = 270
-max_limit = 10
-timeout = 20.0
+
+# 最多读取多少条聊天记录
+max_limit = 30
+
+# 单次请求超时时间（秒）
+timeout = 25.0
+
+# 最大并发搜索请求数
 max_concurrency = 3
+
+# 失败重试次数
 retry_attempts = 3
+
+# 最小重试等待时间（秒）
 retry_wait_min = 1.5
+
+# 最大重试等待时间（秒）
 retry_wait_max = 8.0
+
+# 输出模式：brief / structured / raw
 output_mode = "brief"
 
+
+# 提示词配置
 [prompt]
+
+# 系统提示词
 system_prompt = "你是专业的实时信息检索助手，擅长结合外部最新信息进行事实核查、热点整理与简明总结。"

@@ -7,10 +7,9 @@ class SearchPromptBuilder:
         context_text: str,
         current_time_text: str,
         direction: str,
-        provider_name: str,
     ) -> str:
         return f"""
-你是一名专业的联网检索与事实归纳助手，当前服务后端是：{provider_name}。
+你是一名专业的联网检索与事实归纳助手。
 
 你的任务是：
 根据用户问题与最近聊天上下文，调用具备较强时效性的模型检索能力，对外部信息进行可靠总结。

@@ -98,7 +98,6 @@ class SearchService:
 
     async def _search_once(self, request: SearchRequest) -> str:
         timeout = self.ctx.get_config("search.timeout", 20.0)
-        provider_name = self.ctx.get_config("model.provider", "grok")
         direction = self.ctx.get_config(
             "search.direction",
             "请优先关注事实准确性、时效性和来源可靠性。"
@@ -113,7 +112,6 @@ class SearchService:
             context_text=request.context_text,
             current_time_text=request.current_time_text,
             direction=direction,
-            provider_name=provider_name,
         )
 
         client = AsyncOpenAI(
@@ -123,7 +121,6 @@ class SearchService:
 
         logger.info(
             f"[internet_search_plugin] 开始搜索 question={request.question}, "
-            f"provider={provider_name}"
         )
 
         completion = await client.chat.completions.create(
@@ -140,7 +137,6 @@ class SearchService:
 
         logger.info(
             f"[internet_search_plugin] 搜索完成 question={request.question}, "
-            f"provider={provider_name}"
         )
 
         if not content:
