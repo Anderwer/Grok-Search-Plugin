@@ -1,0 +1,33 @@
+{
+  "manifest_version": 1,
+  "name": "Grok Search Plugin",
+  "version": "1.0.0",
+  "description": "为 MaiBot 提供基于高时效性模型的联网检索与事实归纳能力，优先面向 Grok 场景设计。",
+  "author": {
+    "name": "Anderwer",
+    "url": "https://github.com/Anderwer"
+  },
+  "license": "MIT",
+  "host_application": {
+    "min_version": "0.12.1"
+  },
+  "repository_url": "https://github.com/Anderwer/grok-search-plugin",
+  "categories": ["External Integration"],
+  "keywords": ["grok", "search", "internet", "llm", "tool"],
+  "plugin_info": {
+    "is_built_in": false,
+    "plugin_type": "general",
+    "components": [
+      {
+        "type": "tool",
+        "name": "grounded_search",
+        "description": "联网检索与事实归纳工具"
+      },
+      {
+        "type": "command",
+        "name": "internet_search",
+        "description": "手动联网搜索命令"
+      }
+    ]
+  }
+}

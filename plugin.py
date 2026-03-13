@@ -1,0 +1,145 @@
+from typing import List, Tuple, Type
+
+from src.plugin_system import (
+    BasePlugin,
+    ComponentInfo,
+    ConfigField,
+    register_plugin,
+)
+
+from .components import GroundedSearchTool, SearchCommand
+
+
+@register_plugin
+class GrokSearchPlugin(BasePlugin):
+    """Grok 搜索插件"""
+
+    plugin_name = "grok_search_plugin"
+    enable_plugin = True
+    dependencies = []
+    python_dependencies = ["openai"]
+    config_file_name = "config.toml"
+
+    config_section_descriptions = {
+        "plugin": "插件基础信息",
+        "model": "搜索模型配置（推荐 Grok / Gemini 所在兼容接口）",
+        "search": "搜索行为配置",
+        "prompt": "提示词配置",
+    }
+
+    config_schema = {
+        "plugin": {
+            "name": ConfigField(
+                type=str,
+                default="grok_search_plugin",
+                description="插件名称"
+            ),
+            "version": ConfigField(
+                type=str,
+                default="1.0.0",
+                description="插件版本"
+            ),
+            "config_version": ConfigField(
+                type=str,
+                default="1.0.0",
+                description="配置文件版本"
+            ),
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用插件"
+            ),
+        },
+        "model": {
+            "provider": ConfigField(
+                type=str,
+                default="grok",
+                description="搜索模型提供方标识，例如 grok / gemini"
+            ),
+            "base_url": ConfigField(
+                type=str,
+                default="https://api.openai.com/v1",
+                description="兼容 OpenAI Chat Completions 的接口地址"
+            ),
+            "api_key": ConfigField(
+                type=str,
+                default="",
+                description="模型 API Key"
+            ),
+            "model": ConfigField(
+                type=str,
+                default="grok-2-1212",
+                description="用于联网检索总结的模型名称"
+            ),
+            "temperature": ConfigField(
+                type=float,
+                default=0.2,
+                description="生成温度，建议较低以减少发散"
+            ),
+        },
+        "search": {
+            "direction": ConfigField(
+                type=str,
+                default="请优先关注热点事件、事实准确性、发布时间、版本变更和外部资料的可靠性。",
+                description="搜索归纳方向"
+            ),
+            "enable_context": ConfigField(
+                type=bool,
+                default=True,
+                description="是否附带最近聊天上下文帮助理解问题"
+            ),
+            "time_gap": ConfigField(
+                type=int,
+                default=270,
+                description="读取最近多少秒内的聊天记录"
+            ),
+            "max_limit": ConfigField(
+                type=int,
+                default=10,
+                description="最多读取多少条聊天记录"
+            ),
+            "timeout": ConfigField(
+                type=float,
+                default=20.0,
+                description="单次请求超时时间（秒）"
+            ),
+            "max_concurrency": ConfigField(
+                type=int,
+                default=3,
+                description="最大并发搜索请求数"
+            ),
+            "retry_attempts": ConfigField(
+                type=int,
+                default=3,
+                description="失败重试次数"
+            ),
+            "retry_wait_min": ConfigField(
+                type=float,
+                default=1.5,
+                description="最小重试等待时间（秒）"
+            ),
+            "retry_wait_max": ConfigField(
+                type=float,
+                default=8.0,
+                description="最大重试等待时间（秒）"
+            ),
+            "output_mode": ConfigField(
+                type=str,
+                default="brief",
+                description="输出模式：brief / structured / raw"
+            ),
+        },
+        "prompt": {
+            "system_prompt": ConfigField(
+                type=str,
+                default="你是专业的联网检索助手，擅长根据外部信息生成可靠、简洁、及时的总结。",
+                description="系统提示词"
+            ),
+        },
+    }
+
+    def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
+        return [
+            (GroundedSearchTool.get_tool_info(), GroundedSearchTool),
+            (SearchCommand.get_command_info(), SearchCommand),
+        ]

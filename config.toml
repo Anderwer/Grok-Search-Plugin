@@ -1,0 +1,27 @@
+[plugin]
+name = "grok_search_plugin"
+version = "1.0.0"
+config_version = "1.0.0"
+enabled = true
+
+[model]
+provider = "grok"
+base_url = "https://api.x.ai/v1"
+api_key = "YOUR_API_KEY"
+model = "grok-4"
+temperature = 0.2
+
+[search]
+direction = "请优先关注热点事件、事实准确性、发布时间、版本变更和外部资料的可靠性。"
+enable_context = true
+time_gap = 270
+max_limit = 10
+timeout = 20.0
+max_concurrency = 3
+retry_attempts = 3
+retry_wait_min = 1.5
+retry_wait_max = 8.0
+output_mode = "brief"
+
+[prompt]
+system_prompt = "你是专业的实时信息检索助手，擅长结合外部最新信息进行事实核查、热点整理与简明总结。"
