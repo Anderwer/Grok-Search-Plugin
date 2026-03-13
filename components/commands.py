@@ -6,7 +6,7 @@ from src.plugin_system import BaseCommand
 from ..services import SearchService
 from ..utils import format_search_result
 
-logger = get_logger("grok_search_plugin")
+logger = get_logger("search_command")
 
 
 class SearchCommand(BaseCommand):

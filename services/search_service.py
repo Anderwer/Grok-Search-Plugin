@@ -10,8 +10,7 @@ from src.plugin_system import message_api
 from ..models import SearchRequest
 from ..prompts import SearchPromptBuilder
 
-logger = get_logger("grok_search_plugin")
-
+logger = get_logger("search_service")
 
 class SearchService:
     """联网搜索服务：负责上下文、重试、限流、模型调用"""

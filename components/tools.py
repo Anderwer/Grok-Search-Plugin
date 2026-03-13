@@ -6,7 +6,7 @@ from src.plugin_system import BaseTool, ToolParamType
 from ..services import SearchService
 from ..utils import format_search_result
 
-logger = get_logger("grok_search_plugin")
+logger = get_logger("search_tool")
 
 
 class GroundedSearchTool(BaseTool):
@@ -18,7 +18,7 @@ class GroundedSearchTool(BaseTool):
         "使用该工具进行联网检索和可靠总结。适合热点、新闻、梗、近期事件、版本更新等问题。"
     )
     parameters = [
-        ("question", ToolParamType.STRING, "要搜索的问题、关键词或主题", True),
+    ("question", ToolParamType.STRING, "要搜索的问题、关键词或主题", True, None),
     ]
     available_for_llm = True
 
