@@ -82,7 +82,7 @@ class SearchService:
             except Exception as e:
                 last_error = e
                 logger.warning(
-                    f"[internet_search_plugin] 搜索失败 "
+                    f"搜索失败 "
                     f"({attempt}/{retry_attempts}) question={question}, error={e}"
                 )
 
@@ -119,7 +119,7 @@ class SearchService:
         )
 
         logger.info(
-            f"[internet_search_plugin] 开始搜索 question={request.question}, "
+            f"开始搜索 question={request.question}, "
         )
 
         completion = await client.chat.completions.create(
@@ -135,7 +135,7 @@ class SearchService:
         content = (completion.choices[0].message.content or "").strip()
 
         logger.info(
-            f"[internet_search_plugin] 搜索完成 question={request.question}, "
+            f"搜索完成 question={request.question}, "
         )
 
         if not content:
