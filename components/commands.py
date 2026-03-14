@@ -44,7 +44,10 @@ class SearchCommand(BaseCommand):
                         vision = VisionService(self)
                         image_context = await vision.analyze_image_base64(
                             visual.image_base64,
-                            question,
+                            user_question=question,
+                            source_type=visual.source_type,
+                            source_id=visual.source_id,
+                            file_path=visual.file_path,
                         )
 
                     # 如果没分析出内容，退回 text_hint

@@ -190,7 +190,7 @@ class GrokSearchPlugin(BasePlugin):
             ),
             "cache_file": ConfigField(
                 type=str,
-                default="data/plugins/grok_search_plugin/image_analysis_cache.json",
+                default="data/plugins/grok_search_plugin/cache.db",
                 description="图片分析缓存文件路径"
             ),
             "cache_ttl_seconds": ConfigField(

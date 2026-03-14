@@ -84,7 +84,10 @@ class RecentImageSearchTool(BaseTool):
                 vision = VisionService(self)
                 image_context = await vision.analyze_image_base64(
                     visual.image_base64,
-                    question,
+                    user_question=question,
+                    source_type=visual.source_type,
+                    source_id=visual.source_id,
+                    file_path=visual.file_path,
                 )
 
             # 如果没有原图分析结果，但有文本提示，就退回文本提示

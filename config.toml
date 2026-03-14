@@ -98,7 +98,7 @@ recent_image_time_gap = 120
 recent_image_scan_limit = 15
 
 # 图片分析缓存文件路径
-cache_file = "data/plugins/grok_search_plugin/image_analysis_cache.json"
+cache_db_path = "data/plugins/grok_search_plugin/cache.db"
 
 # 图片分析缓存有效期（秒）
 cache_ttl_seconds = 2592000
