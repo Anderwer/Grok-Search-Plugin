@@ -61,6 +61,49 @@ retry_wait_max = 8.0
 output_mode = "brief"
 
 
+# 图片识别与缓存配置
+[vision]
+
+# 是否启用图片视觉分析
+enabled = true
+
+# 视觉模型接口地址
+base_url = "https://api.openai.com/v1"
+
+# 视觉模型 API 密钥
+api_key = ""
+
+# 视觉模型名称
+model = "grok-4"
+
+# 视觉分析温度
+temperature = 0.1
+
+# 视觉分析超时时间（秒）
+timeout = 20.0
+
+# 视觉分析提示词
+prompt = "请准确识别图片中的人物、角色、作品线索、文字信息和可能的梗来源，不要编造。"
+
+# 当前消息无图时，是否回退查找最近图片
+fallback_to_recent_image = true
+
+# 是否优先查找当前用户最近发送的图片
+prefer_same_user_recent_image = true
+
+# 回溯最近图片的时间范围（秒）
+recent_image_time_gap = 120
+
+# 最多检查最近多少条消息
+recent_image_scan_limit = 15
+
+# 图片分析缓存文件路径
+cache_file = "data/plugins/grok_search_plugin/image_analysis_cache.json"
+
+# 图片分析缓存有效期（秒）
+cache_ttl_seconds = 2592000
+
+
 # 提示词配置
 [prompt]
 

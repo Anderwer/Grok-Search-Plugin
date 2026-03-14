@@ -8,7 +8,7 @@ from src.plugin_system import (
 )
 
 from .components import GroundedSearchTool, SearchCommand
-
+from .components import GroundedSearchTool, SearchCommand, RecentImageSearchTool
 
 @register_plugin
 class GrokSearchPlugin(BasePlugin):
@@ -25,6 +25,7 @@ class GrokSearchPlugin(BasePlugin):
         "model": "搜索模型配置(推荐使用Grok模型)",
         "search": "搜索行为配置",
         "prompt": "提示词配置",
+        "vision": "图片识别与缓存配置",
     }
 
     config_schema = {
@@ -131,10 +132,78 @@ class GrokSearchPlugin(BasePlugin):
                 description="系统提示词"
             ),
         },
+        "vision": {
+            "enabled": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用图片视觉分析"
+            ),
+            "base_url": ConfigField(
+                type=str,
+                default="https://api.openai.com/v1",
+                description="视觉模型接口地址"
+            ),
+            "api_key": ConfigField(
+                type=str,
+                default="",
+                description="视觉模型 API 密钥"
+            ),
+            "model": ConfigField(
+                type=str,
+                default="grok-4",
+                description="视觉模型名称"
+            ),
+            "temperature": ConfigField(
+                type=float,
+                default=0.1,
+                description="视觉分析温度"
+            ),
+            "timeout": ConfigField(
+                type=float,
+                default=20.0,
+                description="视觉分析超时时间（秒）"
+            ),
+            "prompt": ConfigField(
+                type=str,
+                default="请准确识别图片中的人物、角色、作品线索、文字信息和可能的梗来源，不要编造。",
+                description="视觉分析提示词"
+            ),
+            "fallback_to_recent_image": ConfigField(
+                type=bool,
+                default=True,
+                description="当前消息无图时，是否回退查找最近图片"
+            ),
+            "prefer_same_user_recent_image": ConfigField(
+                type=bool,
+                default=True,
+                description="是否优先查找当前用户最近发送的图片"
+            ),
+            "recent_image_time_gap": ConfigField(
+                type=int,
+                default=120,
+                description="回溯最近图片的时间范围（秒）"
+            ),
+            "recent_image_scan_limit": ConfigField(
+                type=int,
+                default=15,
+                description="最多检查最近多少条消息"
+            ),
+            "cache_file": ConfigField(
+                type=str,
+                default="data/plugins/grok_search_plugin/image_analysis_cache.json",
+                description="图片分析缓存文件路径"
+            ),
+            "cache_ttl_seconds": ConfigField(
+                type=int,
+                default=2592000,
+                description="图片分析缓存有效期（秒），30天"
+            ),
+},
     }
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
         return [
             (GroundedSearchTool.get_tool_info(), GroundedSearchTool),
+            (RecentImageSearchTool.get_tool_info(), RecentImageSearchTool),
             (SearchCommand.get_command_info(), SearchCommand),
         ]

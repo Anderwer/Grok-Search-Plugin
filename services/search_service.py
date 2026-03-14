@@ -9,6 +9,7 @@ from src.plugin_system import message_api
 
 from ..models import SearchRequest
 from ..prompts import SearchPromptBuilder
+from ..utils.model_response import extract_completion_content
 
 logger = get_logger("search_service")
 
@@ -56,12 +57,12 @@ class SearchService:
             logger.warning(f"[grok_search_plugin] 获取上下文失败: {e}")
             return "（上下文获取失败）"
 
-    async def search(self, question: str) -> str:
+    async def search(self, question: str, image_context: str = "") -> str:
         question = (question or "").strip()
         if not question:
             raise ValueError("缺少必要参数: question")
 
-        request = self.build_request(question)
+        request = self.build_request(question, image_context)
         retry_attempts = self.ctx.get_config("search.retry_attempts", 3)
         retry_wait_min = self.ctx.get_config("search.retry_wait_min", 1.5)
         retry_wait_max = self.ctx.get_config("search.retry_wait_max", 8.0)
@@ -123,20 +124,17 @@ class SearchService:
         )
 
         completion = await client.chat.completions.create(
-            model=self.ctx.get_config("model.model"),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=self.ctx.get_config("model.temperature", 0.2),
-            timeout=timeout,
-        )
+        model=self.ctx.get_config("model.model"),
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=self.ctx.get_config("model.temperature", 0.2),
+        timeout=timeout,
+    )
 
-        content = (completion.choices[0].message.content or "").strip()
-
-        logger.info(
-            f"搜索完成 question={request.question}, "
-        )
+        logger.debug(f"[grok_search_plugin] search completion type={type(completion)}")
+        content = extract_completion_content(completion)
 
         if not content:
             return "暂无足够可信的搜索结果。"
