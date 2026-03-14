@@ -427,7 +427,6 @@ class ImageResolverService:
         return None
 
     def _resolve_from_db_message(self, db_msg) -> VisualContext:
-        # 1. 普通图片：processed_plain_text / display_message 中查 picid
         text_pool: List[str] = []
 
         for field in ("processed_plain_text", "display_message"):
@@ -435,7 +434,7 @@ class ImageResolverService:
             if isinstance(val, str) and val.strip():
                 text_pool.append(val)
 
-        # 2. additional_config 中可能带 message_segment
+        # additional_config 中可能带 message_segment
         config_str = getattr(db_msg, "additional_config", None)
         if config_str:
             try:
@@ -445,11 +444,10 @@ class ImageResolverService:
                     if isinstance(seg_dict, dict):
                         seg = Seg.from_dict(seg_dict)
                         self._collect_texts_from_any(seg, text_pool)
-                        # 同时也尝试直接 binary candidate
+
                         direct_candidates = []
                         self._collect_binary_candidates(seg, direct_candidates)
                         for item in self._unique_list(direct_candidates):
-                            # 这里只能同步尝试本地/简单类型，异步 url 不在这里做
                             if os.path.exists(item):
                                 return self._build_visual_context_from_file(
                                     item,
@@ -459,21 +457,20 @@ class ImageResolverService:
             except Exception:
                 pass
 
-        # 普通图片优先
+        # 1. 普通图片优先
         picids = self._extract_picids_from_texts(text_pool)
         for picid in picids:
             ctx = self._build_visual_context_from_picid(picid)
             if ctx.source_type != "none":
                 return ctx
 
-        # 表情包
-        is_emoji = int(getattr(db_msg, "is_emoji", 0) or 0)
-        if is_emoji:
-            labels = self._extract_emoji_labels_from_texts(text_pool)
-            if labels:
-                ctx = self._build_visual_context_from_emoji_labels(labels)
-                if ctx.source_type != "none" or ctx.text_hint:
-                    return ctx
+        # 2. 表情包：不要再依赖 is_emoji，直接根据文本特征判断
+        labels = self._extract_emoji_labels_from_texts(text_pool)
+        if labels:
+            logger.info(f"检测到表情包标签 labels={labels}")
+            ctx = self._build_visual_context_from_emoji_labels(labels)
+            if ctx.source_type != "none" or ctx.text_hint:
+                return ctx
 
         return VisualContext()
 
