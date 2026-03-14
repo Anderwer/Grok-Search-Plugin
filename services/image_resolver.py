@@ -7,7 +7,7 @@ import time
 from typing import Any, List, Optional
 
 from maim_message import Seg
-from src.common.database.database_model import Images
+from src.common.database.database_model import Images, Emoji, EmojiDescriptionCache
 from src.common.logger import get_logger
 
 from ..models import VisualContext
@@ -18,8 +18,17 @@ logger = get_logger("image_resolver")
 class ImageResolverService:
     """
     统一视觉资源解析器：
-    1. 普通图片：优先从 picid -> data/images/<picid>.png 或 Images 表中取原图
-    2. 表情包：从 [表情包：xxx] 提取标签，去 emoji 表中模糊匹配 full_path
+
+    1. 普通图片：
+       - 优先从 [picid:xxx] -> data/images/<picid>.png
+       - 或 Images 表中取原图
+
+    2. 表情包：
+       - 从 [表情包：xxx,xxx] 提取标签
+       - 先查 emoji 主表（已注册表情包）
+       - 再查 EmojiDescriptionCache（未注册但已缓存的表情包）
+       - 最后尝试 data/emoji/<hash>.gif/png/jpg/jpeg/webp
+
     3. 回溯最近消息时优先当前用户
     """
 
@@ -29,15 +38,18 @@ class ImageResolverService:
     async def resolve_visual_context_for_query(self) -> VisualContext:
         """
         返回本次查询应使用的视觉上下文：
-        - source_type=image: 有原图，可走视觉模型
-        - source_type=emoji: 有表情包原图，可走视觉模型
+        - source_type=image: 有普通图片原图
+        - source_type=emoji: 有表情包原图或至少有表情包描述
         - source_type=none: 没找到
         """
         # 1. 当前消息优先
         current_message = self._get_current_message()
         current_ctx = await self._resolve_from_message_object(current_message)
         if current_ctx.source_type != "none":
-            logger.info(f"命中当前消息视觉资源 source_type={current_ctx.source_type}")
+            logger.info(
+                f"命中当前消息视觉资源 source_type={current_ctx.source_type}, "
+                f"file_path={current_ctx.file_path}, source_id={current_ctx.source_id}"
+            )
             return current_ctx
 
         # 2. 回溯最近消息
@@ -48,7 +60,10 @@ class ImageResolverService:
                 )
             )
             if recent_ctx.source_type != "none":
-                logger.info(f"命中最近视觉资源 source_type={recent_ctx.source_type}")
+                logger.info(
+                    f"命中最近视觉资源 source_type={recent_ctx.source_type}, "
+                    f"file_path={recent_ctx.file_path}, source_id={recent_ctx.source_id}"
+                )
                 return recent_ctx
 
         logger.info("未找到可用视觉资源")
@@ -74,7 +89,7 @@ class ImageResolverService:
             if ctx.source_type != "none":
                 return ctx
 
-        # 2. 再尝试直接从消息对象中找 image/emoji 段里的 file/url/base64
+        # 2. 再尝试直接从消息对象中找 image/emoji/sticker 段里的 file/url/base64
         direct_ctx = await self._resolve_direct_binary_from_message(message)
         if direct_ctx.source_type != "none":
             return direct_ctx
@@ -82,8 +97,9 @@ class ImageResolverService:
         # 3. 最后处理 [表情包：xxx]
         emoji_labels = self._extract_emoji_labels_from_texts(text_pool)
         if emoji_labels:
+            logger.info(f"当前消息检测到表情包标签 labels={emoji_labels}")
             ctx = self._build_visual_context_from_emoji_labels(emoji_labels)
-            if ctx.source_type != "none":
+            if ctx.source_type != "none" or ctx.text_hint:
                 return ctx
 
         return VisualContext()
@@ -125,7 +141,6 @@ class ImageResolverService:
                 for item in data:
                     self._collect_texts_from_any(item, out)
 
-            # 某些文本段本身可能在 Seg 里
             if seg_type == "text":
                 try:
                     txt = str(data)
@@ -194,7 +209,6 @@ class ImageResolverService:
             return
 
         if isinstance(obj, dict):
-            # 支持 {"type": "...", "data": {...}}
             if "type" in obj and "data" in obj:
                 try:
                     seg = Seg.from_dict(obj)
@@ -300,31 +314,45 @@ class ImageResolverService:
 
     def _build_visual_context_from_emoji_labels(self, labels: List[str]) -> VisualContext:
         """
-        从 emoji 表中根据标签模糊匹配 full_path。
-        注意：下面的 Emoji 模型类名可能需要按你的项目真实名字改。
+        表情包解析优先级：
+        1. emoji 主表（已注册表情包）
+        2. EmojiDescriptionCache + data/emoji 缓存文件（未注册但已缓存）
+        3. 都没有时返回 text_hint
         """
         if not labels:
             return VisualContext()
 
-        emoji_model = self._get_emoji_model()
-        if emoji_model is None:
-            logger.warning("未找到 emoji 数据模型，请检查 database_model 中的表模型类名")
-            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
+        # 1. 先查 emoji 主表
+        ctx = self._find_from_registered_emoji(labels)
+        if ctx.source_type != "none" or ctx.text_hint:
+            return ctx
 
+        # 2. 再查 EmojiDescriptionCache
+        ctx = self._find_from_emoji_description_cache(labels)
+        if ctx.source_type != "none" or ctx.text_hint:
+            return ctx
+
+        logger.info(f"未找到表情包匹配结果 labels={labels}")
+        return VisualContext(text_hint="表情包标签：" + "、".join(labels))
+
+    def _find_from_registered_emoji(self, labels: List[str]) -> VisualContext:
         try:
-            candidates = emoji_model.select().where(
-                emoji_model.is_registered == 1,
-                emoji_model.is_banned == 0,
+            candidates = Emoji.select().where(
+                Emoji.is_registered == 1,
+                Emoji.is_banned == 0,
             )
         except Exception as e:
             logger.warning(f"查询 emoji 表失败: {e}")
-            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
+            return VisualContext()
 
         best = None
         best_score = 0
 
         for item in candidates:
-            haystack = f"{getattr(item, 'description', '')} {getattr(item, 'emotion', '')}"
+            haystack = " ".join([
+                str(getattr(item, "description", "") or ""),
+                str(getattr(item, "emotion", "") or ""),
+            ])
             score = 0
             for label in labels:
                 if label and label in haystack:
@@ -334,8 +362,8 @@ class ImageResolverService:
                 best = item
 
         if not best:
-            logger.info(f"未在 emoji 表中找到匹配标签: {labels}")
-            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
+            logger.info(f"未在 emoji 主表中找到匹配标签: {labels}")
+            return VisualContext()
 
         full_path = getattr(best, "full_path", "") or ""
         description = getattr(best, "description", "") or ""
@@ -350,13 +378,79 @@ class ImageResolverService:
             ctx.text_hint = description or emotion or ("表情包标签：" + "、".join(labels))
             return ctx
 
-        # 即使没原图，也返回文本提示，后续可降级给搜索用
         return VisualContext(
             source_type="emoji",
             text_hint=description or emotion or ("表情包标签：" + "、".join(labels)),
             file_path=full_path,
             source_id=str(getattr(best, "id", "")),
         )
+
+    def _find_from_emoji_description_cache(self, labels: List[str]) -> VisualContext:
+        try:
+            candidates = EmojiDescriptionCache.select()
+        except Exception as e:
+            logger.warning(f"查询 EmojiDescriptionCache 失败: {e}")
+            return VisualContext()
+
+        best = None
+        best_score = 0
+
+        for item in candidates:
+            haystack = " ".join([
+                str(getattr(item, "description", "") or ""),
+                str(getattr(item, "emotion_tags", "") or ""),
+            ])
+            score = 0
+            for label in labels:
+                if label and label in haystack:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best = item
+
+        if not best:
+            logger.info(f"未在 EmojiDescriptionCache 中找到匹配标签: {labels}")
+            return VisualContext()
+
+        emoji_hash = getattr(best, "emoji_hash", "") or ""
+        description = getattr(best, "description", "") or ""
+        emotion = getattr(best, "emotion_tags", "") or ""
+
+        file_path = self._find_cached_emoji_file_by_hash(emoji_hash)
+
+        if file_path and os.path.exists(file_path):
+            ctx = self._build_visual_context_from_file(
+                file_path,
+                source_type="emoji",
+                source_id=emoji_hash,
+            )
+            ctx.text_hint = description or emotion or ("表情包标签：" + "、".join(labels))
+            return ctx
+
+        return VisualContext(
+            source_type="emoji",
+            text_hint=description or emotion or ("表情包标签：" + "、".join(labels)),
+            file_path=file_path,
+            source_id=emoji_hash,
+        )
+
+    def _find_cached_emoji_file_by_hash(self, emoji_hash: str) -> str:
+        if not emoji_hash:
+            return ""
+
+        base_dir = os.path.join("data", "emoji")
+        short_hash = emoji_hash[:8]
+
+        candidates = []
+        for name in (emoji_hash, short_hash):
+            for ext in ("gif", "png", "jpg", "jpeg", "webp"):
+                candidates.append(os.path.join(base_dir, f"{name}.{ext}"))
+
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+
+        return ""
 
     async def _find_recent_visual_context(self, prefer_same_user: bool = True) -> VisualContext:
         try:
@@ -464,7 +558,7 @@ class ImageResolverService:
             if ctx.source_type != "none":
                 return ctx
 
-        # 2. 表情包：不要再依赖 is_emoji，直接根据文本特征判断
+        # 2. 表情包：不依赖 is_emoji，只要有 [表情包：...] 就尝试
         labels = self._extract_emoji_labels_from_texts(text_pool)
         if labels:
             logger.info(f"检测到表情包标签 labels={labels}")
@@ -489,6 +583,7 @@ class ImageResolverService:
                 source_type=source_type,
                 image_base64=b64,
                 image_hash=image_hash,
+                text_hint="",
                 file_path=path,
                 source_id=source_id,
             )
@@ -509,6 +604,8 @@ class ImageResolverService:
                 source_type=source_type,
                 image_base64=image_base64,
                 image_hash=image_hash,
+                text_hint="",
+                file_path="",
                 source_id=source_id,
             )
         except Exception as e:
@@ -537,20 +634,3 @@ class ImageResolverService:
             seen.add(key)
             result.append(item)
         return result
-
-    def _get_emoji_model(self):
-        """
-        这里尝试自动适配 emoji 表模型名。
-        你如果知道真实类名，建议直接改成显式导入，最稳。
-        """
-        try:
-            import src.common.database.database_model as dbm
-        except Exception:
-            return None
-
-        for name in ("Emoji", "EmojiRegisted", "EmojiRegistered", "Emojis"):
-            model = getattr(dbm, name, None)
-            if model is not None:
-                return model
-
-        return None
