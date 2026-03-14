@@ -6,7 +6,11 @@ from src.plugin_system import BaseTool, ToolParamType
 from ..services import SearchService
 from ..services.image_resolver import ImageResolverService
 from ..services.vision_service import VisionService
-from ..utils import format_search_result
+from ..utils import (
+    format_search_result,
+    should_use_vision_direct_answer,
+    format_vision_direct_answer,
+)
 
 logger = get_logger("search_tool")
 
@@ -93,6 +97,19 @@ class RecentImageSearchTool(BaseTool):
             # 如果没有原图分析结果，但有文本提示，就退回文本提示
             if not image_context and visual.text_hint:
                 image_context = visual.text_hint
+
+            # 新增：总开关控制识图类问题是否只走视觉模型
+            direct_answer_mode = self.get_config("vision.direct_answer_mode", False)
+            if (
+                direct_answer_mode
+                and image_context
+                and should_use_vision_direct_answer(question)
+            ):
+                logger.info("direct_answer_mode 已开启，图片工具直接返回视觉模型结果")
+                return {
+                    "name": self.name,
+                    "content": format_vision_direct_answer(question, image_context)
+                }
 
             raw_result = await search.search(
                 question=question,

@@ -26,17 +26,20 @@ Grok Search Plugin 目前提供三类能力：
 1. 获取当前消息中的图片
 2. 如果当前消息没有图片，则回溯当前用户最近发送的图片
 3. 如果是表情包，则尝试从：
-   - emoji 主表
-   - EmojiDescriptionCache
-   - `data/emoji/` 缓存文件  
-   中恢复原始资源
+   - `Emoji` 主表
+   - `EmojiDescriptionCache`
+   - `data/emoji/` 缓存文件
+中恢复原始资源
 4. 对图片做视觉分析
-5. 再结合用户问题做搜索或归纳
+5. 根据配置决定：
+   - **直接返回视觉结果**
+   - 或**继续交给搜索模型进行归纳/补充**
 
 适用于：
 
 - 这是谁
 - 这张图里的人物是谁
+- 这是什么角色
 - 这是什么梗
 - 这图出自哪里
 - 图里写了什么
@@ -61,20 +64,23 @@ Grok Search Plugin 目前提供三类能力：
 - 最近图片回溯
 - 表情包恢复
 - 图片分析缓存
+- 视觉直出 / 视觉后继续搜索模型
 
 ---
 
-## 当前版本新增能力
+## 当前版本能力
 
 相较于早期版本，新版插件新增了以下能力：
 
 - ✅ 普通文本搜索与图片增强搜索分离
 - ✅ 支持当前消息图片与最近图片回溯
 - ✅ 支持普通图片 `picid -> data/images/<picid>.png`
-- ✅ 支持表情包从 emoji 主表恢复原始文件
+- ✅ 支持表情包从 `Emoji` 主表恢复原始文件
 - ✅ 支持从 `EmojiDescriptionCache + data/emoji/` 恢复未注册表情包
 - ✅ 支持图片视觉分析结果缓存，避免重复分析相同图片
+- ✅ 使用**插件私有 SQLite 数据库**存储图片分析缓存
 - ✅ 支持普通搜索 prompt 与图片搜索 prompt 分离
+- ✅ 支持“识图结果是否继续交给搜索模型”的开关
 - ✅ 兼容更多 OpenAI 兼容接口返回格式（对象 / dict / str）
 
 ---
@@ -94,6 +100,7 @@ Grok Search Plugin 目前提供三类能力：
 - 用户先发图，再问：
   - “这是谁”
   - “这张图里的人物是谁”
+  - “这是什么角色”
   - “这是什么梗”
   - “这图出自哪里”
 - 用户发送表情包后询问图中角色或来源
@@ -117,7 +124,8 @@ grok_search_plugin/
 │  ├─ search_service.py
 │  ├─ vision_service.py
 │  ├─ image_resolver.py
-│  └─ analysis_cache.py
+│  ├─ analysis_cache.py
+│  └─ plugin_cache_db.py
 ├─ components/
 │  ├─ __init__.py
 │  ├─ tools.py
@@ -237,7 +245,7 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 
 # 视觉模型名称
-model = "grok-4"
+model = "Gemini 3.1 Flash Lite Preview"
 
 # 视觉分析温度
 temperature = 0.1
@@ -260,8 +268,13 @@ recent_image_time_gap = 120
 # 最多检查最近多少条消息
 recent_image_scan_limit = 15
 
-# 图片分析缓存文件路径
-cache_file = "data/plugins/grok_search_plugin/image_analysis_cache.json"
+# 图片识别结果是否继续发送给搜索模型进行二次处理
+# true = 视觉分析后继续交给搜索模型
+# false = 视觉分析后直接返回结果
+send_vision_result_to_search_model = false
+
+# 插件私有缓存数据库路径
+cache_db_path = "data/plugins/grok_search_plugin/cache.db"
 
 # 图片分析缓存有效期（秒）
 cache_ttl_seconds = 2592000
@@ -311,7 +324,8 @@ cache_ttl_seconds = 2592000
 - `prefer_same_user_recent_image`: 是否优先使用当前用户最近图片
 - `recent_image_time_gap`: 回溯时间窗口
 - `recent_image_scan_limit`: 最大回溯消息数
-- `cache_file`: 图片分析缓存路径
+- `send_vision_result_to_search_model`: 视觉结果是否继续交给搜索模型
+- `cache_db_path`: 插件私有 SQLite 缓存数据库路径
 - `cache_ttl_seconds`: 缓存有效期
 
 ---
@@ -352,7 +366,8 @@ Grok 最近更新了什么
 - 当前消息取图
 - 最近消息回溯
 - 表情包恢复
-- 视觉分析 + 搜索
+- 视觉分析
+- 根据配置决定是否继续交给搜索模型
 
 ---
 
@@ -416,16 +431,64 @@ data/emoji/<hash前8位>.gif
 
 ## 图片分析缓存
 
-插件会对拿到的原始图片内容计算哈希值，并将视觉分析结果缓存到本地 JSON 文件中。
+插件会对拿到的原始图片内容计算哈希值，并将视觉分析结果缓存到**插件私有 SQLite 数据库**中。
+
+默认数据库路径：
+
+```text
+data/plugins/grok_search_plugin/cache.db
+```
+
+缓存表：
+
+```text
+image_analysis_cache
+```
 
 ### 缓存好处
 - 避免重复分析同一张图
 - 降低视觉模型调用成本
 - 提高响应速度
+- 更方便后续调试与查询
 
 ### 缓存范围
 - 普通图片
 - 可恢复原图的表情包
+
+---
+
+## 视觉结果二次处理开关
+
+插件支持控制：
+
+### `send_vision_result_to_search_model = true`
+流程：
+
+```text
+图片 / 表情包 -> 视觉模型 -> 搜索模型 -> 最终结果
+```
+
+适合：
+- 需要补充背景信息
+- 需要进一步归纳说明
+- 需要结合联网结果解释出处、梗图、项目功能等
+
+---
+
+### `send_vision_result_to_search_model = false`
+流程：
+
+```text
+图片 / 表情包 -> 视觉模型 -> 直接返回
+```
+
+适合：
+- “这是谁”
+- “这张图里的人物是谁”
+- “图里写了什么”
+- “这是什么角色”
+
+这类本身主要依赖视觉识别的问题。
 
 ---
 
@@ -449,6 +512,7 @@ data/emoji/<hash前8位>.gif
 - `Command` 组件
 - 配置与元数据分离
 - 多文件工程化结构
+- 插件私有缓存数据库
 
 ---
 
@@ -460,6 +524,7 @@ data/emoji/<hash前8位>.gif
 - 部分平台下表情包与图片的底层表示不同，插件已尽量兼容，但仍受 Adapter 实现影响
 - 建议将视觉模型和搜索模型分开配置，以获得更稳定表现
 - 建议将 `temperature` 设为较低值，减少事实性错误
+- 如果搜索接口返回 HTML 页面而不是模型结果，通常说明 `model.base_url` 配置成了网页地址而不是 API 地址
 
 ---
 

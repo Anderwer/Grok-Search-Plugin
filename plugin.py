@@ -153,6 +153,11 @@ class GrokSearchPlugin(BasePlugin):
                 default="grok-4",
                 description="视觉模型名称"
             ),
+            "direct_answer_mode": ConfigField(
+                type=bool,
+                default=True,
+                description="图片识别类问题是否只使用视觉模型直接回答，如果关闭会在视觉分析后继续交给搜索模型"
+            ),
             "temperature": ConfigField(
                 type=float,
                 default=0.1,

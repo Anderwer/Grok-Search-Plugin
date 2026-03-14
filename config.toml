@@ -21,7 +21,7 @@ base_url = ""
 api_key = ""
 
 # 使用的模型名称
-model = ""
+model = "grok-4"
 
 # 生成温度，建议较低以减少事实性问题的发散
 temperature = 0.2
@@ -68,13 +68,16 @@ output_mode = "brief"
 enabled = true
 
 # 视觉模型接口地址
-base_url = "https://api.openai.com/v1"
+base_url = ""
 
 # 视觉模型 API 密钥
 api_key = ""
 
 # 视觉模型名称
 model = "Gemini 3.1 Flash Lite Preview"
+
+# 图片识别类问题是否只使用视觉模型直接回答
+direct_answer_mode = false
 
 # 视觉分析温度
 temperature = 0.1
