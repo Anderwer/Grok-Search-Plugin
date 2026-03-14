@@ -155,10 +155,10 @@ pip install openai aiohttp
 name = "grok_search_plugin"
 
 # 插件版本
-version = "2.0.0"
+version = "1.0.2"
 
 # 配置文件版本
-config_version = "2.0.0"
+config_version = "1.0.2"
 
 # 是否启用插件
 enabled = true
@@ -174,7 +174,7 @@ base_url = "https://api.x.ai/v1"
 api_key = ""
 
 # 使用的模型名称
-model = "grok-2-1212"
+model = "grok-4"
 
 # 生成温度
 temperature = 0.2
@@ -237,7 +237,7 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 
 # 视觉模型名称
-model = "gpt-4.1"
+model = "grok-4"
 
 # 视觉分析温度
 temperature = 0.1
