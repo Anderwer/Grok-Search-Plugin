@@ -1,4 +1,8 @@
-from .tools import GroundedSearchTool
+from .tools import GroundedSearchTool, RecentImageSearchTool
 from .commands import SearchCommand
 
-__all__ = ["GroundedSearchTool", "SearchCommand"]
+__all__ = [
+    "GroundedSearchTool",
+    "RecentImageSearchTool",
+    "SearchCommand",
+]
