@@ -6,11 +6,7 @@ from src.plugin_system import BaseCommand
 from ..services import SearchService
 from ..services.image_resolver import ImageResolverService
 from ..services.vision_service import VisionService
-from ..utils import (
-    format_search_result,
-    should_use_vision_direct_answer,
-    format_vision_direct_answer,
-)
+from ..utils import format_search_result
 
 logger = get_logger("search_command")
 
@@ -58,16 +54,11 @@ class SearchCommand(BaseCommand):
                     if not image_context and visual.text_hint:
                         image_context = visual.text_hint
 
-                    # 新增：总开关控制识图类问题是否只走视觉模型
+                    # 仅由 direct_answer_mode 决定是否直接返回视觉结果
                     direct_answer_mode = self.get_config("vision.direct_answer_mode", False)
-                    if (
-                        direct_answer_mode
-                        and image_context
-                        and should_use_vision_direct_answer(question)
-                    ):
+                    if direct_answer_mode and image_context:
                         logger.info("direct_answer_mode 已开启，命令模式直接返回视觉模型结果")
-                        result = format_vision_direct_answer(question, image_context)
-                        await self.send_text(result)
+                        await self.send_text(image_context.strip())
                         return True, None, True
 
             search_service = SearchService(self)
