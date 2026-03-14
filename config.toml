@@ -5,7 +5,7 @@
 name = "grok_search_plugin"
 
 # 插件版本
-version = "1.0.0"
+version = "1.0.2"
 
 # 是否启用插件
 enabled = true
@@ -74,7 +74,7 @@ base_url = "https://api.openai.com/v1"
 api_key = ""
 
 # 视觉模型名称
-model = "grok-4"
+model = "Gemini 3.1 Flash Lite Preview"
 
 # 视觉分析温度
 temperature = 0.1
