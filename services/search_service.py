@@ -30,13 +30,14 @@ class SearchService:
             self.__class__._semaphore = asyncio.Semaphore(max_concurrency)
         return self.__class__._semaphore
 
-    def build_request(self, question: str) -> SearchRequest:
+    def build_request(self, question: str, image_context: str = "") -> SearchRequest:
         context_text = self._get_recent_context()
         current_time_text = time.strftime("%Y-%m-%d %H:%M", time.localtime())
         return SearchRequest(
             question=question,
             context_text=context_text,
             current_time_text=current_time_text,
+            image_context=image_context or "",
         )
 
     def _get_recent_context(self) -> str:
@@ -107,12 +108,21 @@ class SearchService:
             "你是专业的联网检索助手，擅长根据外部信息生成可靠、简洁、及时的总结。"
         )
 
-        prompt = SearchPromptBuilder.build(
-            question=request.question,
-            context_text=request.context_text,
-            current_time_text=request.current_time_text,
-            direction=direction,
-        )
+        if request.image_context.strip():
+            prompt = SearchPromptBuilder.build_image_search_prompt(
+                question=request.question,
+                context_text=request.context_text,
+                current_time_text=request.current_time_text,
+                direction=direction,
+                image_context=request.image_context,
+            )
+        else:
+            prompt = SearchPromptBuilder.build_text_search_prompt(
+                question=request.question,
+                context_text=request.context_text,
+                current_time_text=request.current_time_text,
+                direction=direction,
+            )
 
         client = AsyncOpenAI(
             base_url=self.ctx.get_config("model.base_url"),
@@ -120,18 +130,18 @@ class SearchService:
         )
 
         logger.info(
-            f"开始搜索 question={request.question}, "
+            f"开始搜索 question={request.question} "
         )
 
         completion = await client.chat.completions.create(
-        model=self.ctx.get_config("model.model"),
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=self.ctx.get_config("model.temperature", 0.2),
-        timeout=timeout,
-    )
+            model=self.ctx.get_config("model.model"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=self.ctx.get_config("model.temperature", 0.2),
+            timeout=timeout,
+        )
 
         logger.debug(f"[grok_search_plugin] search completion type={type(completion)}")
         content = extract_completion_content(completion)
