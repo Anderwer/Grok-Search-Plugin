@@ -7,7 +7,6 @@ from src.plugin_system import (
     register_plugin,
 )
 
-from .components import GroundedSearchTool, SearchCommand
 from .components import GroundedSearchTool, SearchCommand, RecentImageSearchTool
 
 @register_plugin
@@ -193,10 +192,10 @@ class GrokSearchPlugin(BasePlugin):
                 default=15,
                 description="最多检查最近多少条消息"
             ),
-            "cache_file": ConfigField(
+            "cache_db_path": ConfigField(
                 type=str,
                 default="data/plugins/grok_search_plugin/cache.db",
-                description="图片分析缓存文件路径"
+                description="图片分析缓存数据库路径"
             ),
             "cache_ttl_seconds": ConfigField(
                 type=int,

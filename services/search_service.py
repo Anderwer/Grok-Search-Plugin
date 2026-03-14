@@ -17,6 +17,7 @@ class SearchService:
     """联网搜索服务：负责上下文、重试、限流、模型调用"""
 
     _semaphore: Optional[asyncio.Semaphore] = None
+    _semaphore_max_concurrency: Optional[int] = None
 
     def __init__(self, plugin_context):
         """
@@ -25,9 +26,19 @@ class SearchService:
         self.ctx = plugin_context
 
     def _get_semaphore(self) -> asyncio.Semaphore:
-        if self.__class__._semaphore is None:
-            max_concurrency = self.ctx.get_config("search.max_concurrency", 3)
+        max_concurrency = int(self.ctx.get_config("search.max_concurrency", 3) or 3)
+
+        if max_concurrency <= 0:
+            max_concurrency = 1
+
+        if (
+            self.__class__._semaphore is None
+            or self.__class__._semaphore_max_concurrency != max_concurrency
+        ):
             self.__class__._semaphore = asyncio.Semaphore(max_concurrency)
+            self.__class__._semaphore_max_concurrency = max_concurrency
+            logger.info(f"[grok_search_plugin] 更新搜索并发限制 max_concurrency={max_concurrency}")
+
         return self.__class__._semaphore
 
     def build_request(self, question: str, image_context: str = "") -> SearchRequest:
