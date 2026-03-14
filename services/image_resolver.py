@@ -1,45 +1,58 @@
 import base64
+import hashlib
+import json
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from maim_message import Seg
 from src.common.database.database_model import Images
 from src.common.logger import get_logger
 
+from ..models import VisualContext
+
 logger = get_logger("image_resolver")
 
 
 class ImageResolverService:
+    """
+    统一视觉资源解析器：
+    1. 普通图片：优先从 picid -> data/images/<picid>.png 或 Images 表中取原图
+    2. 表情包：从 [表情包：xxx] 提取标签，去 emoji 表中模糊匹配 full_path
+    3. 回溯最近消息时优先当前用户
+    """
+
     def __init__(self, ctx):
         self.ctx = ctx
 
-    async def resolve_image_for_query(self) -> Optional[str]:
+    async def resolve_visual_context_for_query(self) -> VisualContext:
         """
-        返回本次查询应使用的图片 base64
-        优先级：
-        1. 当前消息中的图
-        2. 当前用户最近的图
-        3. 可选：当前会话最近图
+        返回本次查询应使用的视觉上下文：
+        - source_type=image: 有原图，可走视觉模型
+        - source_type=emoji: 有表情包原图，可走视觉模型
+        - source_type=none: 没找到
         """
+        # 1. 当前消息优先
         current_message = self._get_current_message()
-        candidates = self.extract_candidates_from_message(current_message)
-        if candidates:
-            logger.info("命中当前消息图片")
-            return await self.resolve_candidate_to_base64(candidates[0])
+        current_ctx = await self._resolve_from_message_object(current_message)
+        if current_ctx.source_type != "none":
+            logger.info(f"命中当前消息视觉资源 source_type={current_ctx.source_type}")
+            return current_ctx
 
+        # 2. 回溯最近消息
         if self.ctx.get_config("vision.fallback_to_recent_image", True):
-            recent = await self._find_recent_image_candidate(
+            recent_ctx = await self._find_recent_visual_context(
                 prefer_same_user=self.ctx.get_config(
                     "vision.prefer_same_user_recent_image", True
                 )
             )
-            if recent:
-                logger.info("命中最近图片")
-                return await self.resolve_candidate_to_base64(recent)
+            if recent_ctx.source_type != "none":
+                logger.info(f"命中最近视觉资源 source_type={recent_ctx.source_type}")
+                return recent_ctx
 
-        return None
+        logger.info("未找到可用视觉资源")
+        return VisualContext()
 
     def _get_current_message(self):
         for attr in ("message", "raw_message_obj", "maim_message", "event"):
@@ -48,227 +61,316 @@ class ImageResolverService:
                 return obj
         return None
 
-    def extract_candidates_from_message(self, message: Any) -> List[str]:
+    async def _resolve_from_message_object(self, message: Any) -> VisualContext:
         if message is None:
-            return []
+            return VisualContext()
 
-        items: List[str] = []
+        text_pool = self._extract_texts_from_message(message)
 
-        self._collect_images_from_any(getattr(message, "message_segment", None), items)
+        # 1. 优先按 picid 取普通图片
+        picids = self._extract_picids_from_texts(text_pool)
+        for picid in picids:
+            ctx = self._build_visual_context_from_picid(picid)
+            if ctx.source_type != "none":
+                return ctx
 
-        raw_message = getattr(message, "raw_message", None)
-        if isinstance(raw_message, str):
-            self._collect_images_from_any(raw_message, items)
+        # 2. 再尝试直接从消息对象中找 image/emoji 段里的 file/url/base64
+        direct_ctx = await self._resolve_direct_binary_from_message(message)
+        if direct_ctx.source_type != "none":
+            return direct_ctx
 
-        for attr in ("message", "segments", "data", "content"):
-            self._collect_images_from_any(getattr(message, attr, None), items)
+        # 3. 最后处理 [表情包：xxx]
+        emoji_labels = self._extract_emoji_labels_from_texts(text_pool)
+        if emoji_labels:
+            ctx = self._build_visual_context_from_emoji_labels(emoji_labels)
+            if ctx.source_type != "none":
+                return ctx
 
-        return self._unique_candidates(items)
+        return VisualContext()
 
-    def _collect_images_from_any(self, obj: Any, out: List[str]) -> None:
+    def _extract_texts_from_message(self, message: Any) -> List[str]:
+        texts: List[str] = []
+
+        for attr in ("raw_message", "processed_plain_text", "display_message"):
+            val = getattr(message, attr, None)
+            if isinstance(val, str) and val.strip():
+                texts.append(val)
+
+        for attr in ("message_segment", "message", "segments", "data", "content"):
+            self._collect_texts_from_any(getattr(message, attr, None), texts)
+
+        return self._unique_list(texts)
+
+    def _collect_texts_from_any(self, obj: Any, out: List[str]) -> None:
         if obj is None:
             return
-        if isinstance(obj, Seg):
-            self._handle_seg(obj, out)
+
+        if isinstance(obj, str):
+            if obj.strip():
+                out.append(obj)
             return
+
+        if isinstance(obj, Seg):
+            seg_type = getattr(obj, "type", "")
+            data = getattr(obj, "data", None)
+
+            if isinstance(data, str) and data.strip():
+                out.append(data)
+
+            if isinstance(data, dict):
+                for v in data.values():
+                    self._collect_texts_from_any(v, out)
+
+            if isinstance(data, list):
+                for item in data:
+                    self._collect_texts_from_any(item, out)
+
+            # 某些文本段本身可能在 Seg 里
+            if seg_type == "text":
+                try:
+                    txt = str(data)
+                    if txt.strip():
+                        out.append(txt)
+                except Exception:
+                    pass
+            return
+
+        if isinstance(obj, dict):
+            for v in obj.values():
+                self._collect_texts_from_any(v, out)
+            return
+
         if isinstance(obj, list):
             for item in obj:
-                self._collect_images_from_any(item, out)
+                self._collect_texts_from_any(item, out)
+
+    def _extract_picids_from_texts(self, texts: List[str]) -> List[str]:
+        picids: List[str] = []
+        for text in texts:
+            picids.extend(re.findall(r"\[picid:([^\]]+)\]", text))
+        return self._unique_list(picids)
+
+    def _extract_emoji_labels_from_texts(self, texts: List[str]) -> List[str]:
+        labels: List[str] = []
+        for text in texts:
+            matches = re.findall(r"\[表情包：([^\]]+)\]", text)
+            for raw in matches:
+                parts = [x.strip() for x in raw.replace("，", ",").split(",") if x.strip()]
+                labels.extend(parts)
+        return self._unique_list(labels)
+
+    async def _resolve_direct_binary_from_message(self, message: Any) -> VisualContext:
+        """
+        兼容直接从消息段中拿 file/url/base64 的情况。
+        """
+        candidates = []
+        for attr in ("message_segment", "message", "segments", "data", "content"):
+            self._collect_binary_candidates(getattr(message, attr, None), candidates)
+
+        for item in self._unique_list(candidates):
+            ctx = await self._candidate_to_visual_context(item)
+            if ctx.source_type != "none":
+                return ctx
+
+        return VisualContext()
+
+    def _collect_binary_candidates(self, obj: Any, out: List[str]) -> None:
+        if obj is None:
             return
+
+        if isinstance(obj, Seg):
+            seg_type = getattr(obj, "type", "")
+            data = getattr(obj, "data", None)
+
+            if seg_type in {"image", "emoji", "sticker"}:
+                self._append_binary_candidate(data, out)
+
+            if isinstance(data, dict):
+                for v in data.values():
+                    self._collect_binary_candidates(v, out)
+            elif isinstance(data, list):
+                for item in data:
+                    self._collect_binary_candidates(item, out)
+            return
+
         if isinstance(obj, dict):
-            self._handle_dict(obj, out)
-            return
-        if isinstance(obj, str):
-            self._handle_str(obj, out)
+            # 支持 {"type": "...", "data": {...}}
+            if "type" in obj and "data" in obj:
+                try:
+                    seg = Seg.from_dict(obj)
+                    self._collect_binary_candidates(seg, out)
+                except Exception:
+                    pass
 
-    def _handle_seg(self, seg: Seg, out: List[str]) -> None:
-        seg_type = getattr(seg, "type", "")
-        data = getattr(seg, "data", None)
+            for key in ("file", "url", "base64"):
+                val = obj.get(key)
+                if isinstance(val, str) and val.strip():
+                    out.append(val.strip())
 
-        if seg_type in {"image", "emoji"}:
-            self._append_candidate(data, out)
-            return
-
-        if seg_type == "seglist" and isinstance(data, list):
-            for sub in data:
-                self._collect_images_from_any(sub, out)
-            return
-
-        if isinstance(data, (list, dict, str)):
-            self._collect_images_from_any(data, out)
-
-    def _handle_dict(self, obj: Dict[str, Any], out: List[str]) -> None:
-        if "type" in obj and "data" in obj:
-            try:
-                seg = Seg.from_dict(obj)
-                self._collect_images_from_any(seg, out)
-            except Exception:
-                pass
-
-        for key in ("base64", "url", "file"):
-            self._append_candidate(obj.get(key), out)
-
-        for key in ("message_segment", "message", "data", "content", "segments"):
-            if key in obj:
-                self._collect_images_from_any(obj[key], out)
-
-    def _handle_str(self, s: str, out: List[str]) -> None:
-        self._append_candidate(s, out)
-
-    def _append_candidate(self, value: Any, out: List[str]) -> None:
-        if not value:
+            for v in obj.values():
+                self._collect_binary_candidates(v, out)
             return
 
-        if isinstance(value, dict):
-            for k in ("base64", "url", "file"):
-                v = value.get(k)
-                if isinstance(v, str) and v.strip():
-                    out.append(v.strip())
+        if isinstance(obj, list):
+            for item in obj:
+                self._collect_binary_candidates(item, out)
+
+    def _append_binary_candidate(self, data: Any, out: List[str]) -> None:
+        if not data:
             return
 
-        if not isinstance(value, str):
+        if isinstance(data, dict):
+            for key in ("file", "url", "base64"):
+                val = data.get(key)
+                if isinstance(val, str) and val.strip():
+                    out.append(val.strip())
             return
 
-        value = value.strip()
-        if not value:
-            return
+        if isinstance(data, str) and data.strip():
+            out.append(data.strip())
 
-        if value.startswith("base64://") or value.startswith("data:image/"):
-            out.append(value)
-
-        if value.startswith("http://") or value.startswith("https://"):
-            out.append(value)
-
-        if value.startswith("[CQ:image"):
-            out.append(value)
-
-        picids = re.findall(r"\[picid:[^\]]+\]", value)
-        out.extend(picids)
-
-        urls = re.findall(r"(https?://\S+)", value)
-        out.extend(urls)
-
-    def _unique_candidates(self, items: List[str]) -> List[str]:
-        seen = set()
-        ordered = []
-        for item in items:
-            key = item.strip()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            ordered.append(item)
-        return ordered
-
-    async def resolve_candidate_to_base64(self, candidate: str) -> Optional[str]:
+    async def _candidate_to_visual_context(self, candidate: str) -> VisualContext:
         source = candidate.strip()
         if not source:
-            return None
+            return VisualContext()
 
-        direct = await self._resolve_url_or_base64(source)
-        if direct is not None:
-            return direct
-
-        if source.startswith("[CQ:image"):
-            cq_resolved = await self._resolve_cq_image(source)
-            if cq_resolved is not None:
-                return cq_resolved
-
-        m = re.search(r"\[picid:([^\]]+)\]", source)
-        if m:
-            return await self._picid_to_base64(m.group(1))
-
-        if source.startswith("http://") or source.startswith("https://"):
-            return await self._url_to_base64(source)
-
-        if self._looks_like_base64(source):
-            return self._normalize_base64(source)
-
-        return None
-
-    async def _resolve_url_or_base64(self, source: str) -> Optional[str]:
+        # base64://...
         if source.startswith("base64://"):
-            return self._normalize_base64(source[len("base64://"):])
+            b64 = source[len("base64://"):].strip()
+            return self._build_visual_context_from_base64(
+                b64,
+                source_type="image",
+                source_id="base64_inline",
+            )
 
-        if source.startswith("data:"):
-            return self._normalize_base64(source.split(",", 1)[-1])
+        # data:image/...
+        if source.startswith("data:image/"):
+            b64 = source.split(",", 1)[-1].strip()
+            return self._build_visual_context_from_base64(
+                b64,
+                source_type="image",
+                source_id="data_uri",
+            )
 
-        return None
+        # 本地文件
+        if os.path.exists(source):
+            return self._build_visual_context_from_file(
+                source,
+                source_type="image",
+                source_id=source,
+            )
 
-    async def _resolve_cq_image(self, source: str) -> Optional[str]:
-        base64_match = re.search(r"base64=([^,\]]+)", source)
-        if base64_match:
-            return self._normalize_base64(base64_match.group(1))
+        # url
+        if source.startswith("http://") or source.startswith("https://"):
+            b64 = await self._url_to_base64(source)
+            if b64:
+                return self._build_visual_context_from_base64(
+                    b64,
+                    source_type="image",
+                    source_id=source,
+                )
 
-        url_match = re.search(r"url=([^,\]]+)", source)
-        if url_match:
-            return await self._url_to_base64(url_match.group(1))
+        return VisualContext()
 
-        file_match = re.search(r"file=([^,\]]+)", source)
-        if file_match:
-            file_value = file_match.group(1)
-            if file_value.startswith("base64://"):
-                return self._normalize_base64(file_value[len("base64://"):])
-            if file_value.startswith("http://") or file_value.startswith("https://"):
-                return await self._url_to_base64(file_value)
-            if os.path.exists(file_value):
-                return self._file_to_base64(file_value)
+    def _build_visual_context_from_picid(self, picid: str) -> VisualContext:
+        # 1. 直接按 data/images/<picid>.png 尝试
+        direct_path = os.path.join("data", "images", f"{picid}.png")
+        if os.path.exists(direct_path):
+            return self._build_visual_context_from_file(
+                direct_path,
+                source_type="image",
+                source_id=picid,
+            )
 
-        return None
-
-    async def _picid_to_base64(self, image_id: str) -> Optional[str]:
+        # 2. 再查 Images 表
         try:
-            image = Images.get_or_none(Images.image_id == image_id)
-            if not image:
-                return None
-            path = getattr(image, "path", "") or ""
-            if not path or not os.path.exists(path):
-                return None
-            return self._file_to_base64(path)
+            image = Images.get_or_none(Images.image_id == picid)
+            if image:
+                path = getattr(image, "path", "") or ""
+                if path and os.path.exists(path):
+                    return self._build_visual_context_from_file(
+                        path,
+                        source_type="image",
+                        source_id=picid,
+                    )
         except Exception as e:
-            logger.warning(f"picid 转 base64 失败: {e}")
-            return None
+            logger.warning(f"通过 Images 表解析 picid 失败: {e}")
 
-    async def _url_to_base64(self, url: str) -> Optional[str]:
-        import aiohttp
+        return VisualContext()
+
+    def _build_visual_context_from_emoji_labels(self, labels: List[str]) -> VisualContext:
+        """
+        从 emoji 表中根据标签模糊匹配 full_path。
+        注意：下面的 Emoji 模型类名可能需要按你的项目真实名字改。
+        """
+        if not labels:
+            return VisualContext()
+
+        emoji_model = self._get_emoji_model()
+        if emoji_model is None:
+            logger.warning("未找到 emoji 数据模型，请检查 database_model 中的表模型类名")
+            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=20) as resp:
-                    data = await resp.read()
-            return base64.b64encode(data).decode("utf-8")
+            candidates = emoji_model.select().where(
+                emoji_model.is_registered == 1,
+                emoji_model.is_banned == 0,
+            )
         except Exception as e:
-            logger.warning(f"url 转 base64 失败: {e}")
-            return None
+            logger.warning(f"查询 emoji 表失败: {e}")
+            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
 
-    def _file_to_base64(self, path: str) -> str:
-        with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
+        best = None
+        best_score = 0
 
-    def _normalize_base64(self, b64: str) -> str:
-        return b64.strip()
+        for item in candidates:
+            haystack = f"{getattr(item, 'description', '')} {getattr(item, 'emotion', '')}"
+            score = 0
+            for label in labels:
+                if label and label in haystack:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best = item
 
-    def _looks_like_base64(self, value: str) -> bool:
-        if len(value) < 80:
-            return False
-        try:
-            base64.b64decode(value, validate=True)
-            return True
-        except Exception:
-            return False
+        if not best:
+            logger.info(f"未在 emoji 表中找到匹配标签: {labels}")
+            return VisualContext(text_hint="表情包标签：" + "、".join(labels))
 
-    async def _find_recent_image_candidate(self, prefer_same_user: bool = True) -> Optional[str]:
+        full_path = getattr(best, "full_path", "") or ""
+        description = getattr(best, "description", "") or ""
+        emotion = getattr(best, "emotion", "") or ""
+
+        if full_path and os.path.exists(full_path):
+            ctx = self._build_visual_context_from_file(
+                full_path,
+                source_type="emoji",
+                source_id=str(getattr(best, "id", "")),
+            )
+            ctx.text_hint = description or emotion or ("表情包标签：" + "、".join(labels))
+            return ctx
+
+        # 即使没原图，也返回文本提示，后续可降级给搜索用
+        return VisualContext(
+            source_type="emoji",
+            text_hint=description or emotion or ("表情包标签：" + "、".join(labels)),
+            file_path=full_path,
+            source_id=str(getattr(best, "id", "")),
+        )
+
+    async def _find_recent_visual_context(self, prefer_same_user: bool = True) -> VisualContext:
         try:
             from src.plugin_system.apis import message_api
         except Exception:
-            return None
+            return VisualContext()
 
         chat_stream = getattr(self.ctx, "chat_stream", None)
         if not chat_stream:
-            return None
+            return VisualContext()
 
         stream_id = getattr(chat_stream, "stream_id", None)
         if not stream_id:
-            return None
+            return VisualContext()
 
         lookup_seconds = float(
             self.ctx.get_config("vision.recent_image_time_gap", 120) or 120
@@ -290,54 +392,168 @@ class ImageResolverService:
             )
         except Exception as e:
             logger.warning(f"读取最近消息失败: {e}")
-            return None
+            return VisualContext()
 
         current_user_id = getattr(self.ctx, "user_id", None)
 
+        # 1. 优先当前用户
         if prefer_same_user:
             for msg in reversed(history):
                 msg_user_id = self._get_db_message_user_id(msg)
                 if current_user_id and msg_user_id != current_user_id:
                     continue
-                candidates = self._extract_images_from_db_message(msg)
-                if candidates:
-                    return candidates[0]
+                ctx = self._resolve_from_db_message(msg)
+                if ctx.source_type != "none":
+                    return ctx
 
+        # 2. 再查全会话
         for msg in reversed(history):
-            candidates = self._extract_images_from_db_message(msg)
-            if candidates:
-                return candidates[0]
+            ctx = self._resolve_from_db_message(msg)
+            if ctx.source_type != "none":
+                return ctx
 
-        return None
+        return VisualContext()
 
     def _get_db_message_user_id(self, db_msg) -> Optional[str]:
         try:
             return db_msg.user_info.user_id
         except Exception:
-            return None
+            pass
 
-    def _extract_images_from_db_message(self, db_msg) -> List[str]:
-        images: List[str] = []
+        for attr in ("user_id", "chat_info_user_id"):
+            val = getattr(db_msg, attr, None)
+            if val:
+                return str(val)
+        return None
 
+    def _resolve_from_db_message(self, db_msg) -> VisualContext:
+        # 1. 普通图片：processed_plain_text / display_message 中查 picid
+        text_pool: List[str] = []
+
+        for field in ("processed_plain_text", "display_message"):
+            val = getattr(db_msg, field, None)
+            if isinstance(val, str) and val.strip():
+                text_pool.append(val)
+
+        # 2. additional_config 中可能带 message_segment
         config_str = getattr(db_msg, "additional_config", None)
         if config_str:
             try:
-                import json
                 payload = json.loads(config_str)
                 if isinstance(payload, dict):
                     seg_dict = payload.get("message_segment")
                     if isinstance(seg_dict, dict):
                         seg = Seg.from_dict(seg_dict)
-                        self._collect_images_from_any(seg, images)
+                        self._collect_texts_from_any(seg, text_pool)
+                        # 同时也尝试直接 binary candidate
+                        direct_candidates = []
+                        self._collect_binary_candidates(seg, direct_candidates)
+                        for item in self._unique_list(direct_candidates):
+                            # 这里只能同步尝试本地/简单类型，异步 url 不在这里做
+                            if os.path.exists(item):
+                                return self._build_visual_context_from_file(
+                                    item,
+                                    source_type="image",
+                                    source_id=item,
+                                )
             except Exception:
                 pass
 
-        for field in ("display_message", "processed_plain_text"):
-            text = getattr(db_msg, field, None)
-            if not text:
-                continue
-            images.extend(re.findall(r"\[CQ:image[^\]]+\]", text))
-            images.extend(re.findall(r"(https?://\S+)", text))
-            images.extend(re.findall(r"\[picid:[^\]]+\]", text))
+        # 普通图片优先
+        picids = self._extract_picids_from_texts(text_pool)
+        for picid in picids:
+            ctx = self._build_visual_context_from_picid(picid)
+            if ctx.source_type != "none":
+                return ctx
 
-        return self._unique_candidates(images)
+        # 表情包
+        is_emoji = int(getattr(db_msg, "is_emoji", 0) or 0)
+        if is_emoji:
+            labels = self._extract_emoji_labels_from_texts(text_pool)
+            if labels:
+                ctx = self._build_visual_context_from_emoji_labels(labels)
+                if ctx.source_type != "none" or ctx.text_hint:
+                    return ctx
+
+        return VisualContext()
+
+    def _build_visual_context_from_file(
+        self,
+        path: str,
+        source_type: str,
+        source_id: str = "",
+    ) -> VisualContext:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            b64 = base64.b64encode(data).decode("utf-8")
+            image_hash = hashlib.sha256(data).hexdigest()
+            return VisualContext(
+                source_type=source_type,
+                image_base64=b64,
+                image_hash=image_hash,
+                file_path=path,
+                source_id=source_id,
+            )
+        except Exception as e:
+            logger.warning(f"读取文件失败 path={path}, error={e}")
+            return VisualContext()
+
+    def _build_visual_context_from_base64(
+        self,
+        image_base64: str,
+        source_type: str,
+        source_id: str = "",
+    ) -> VisualContext:
+        try:
+            data = base64.b64decode(image_base64)
+            image_hash = hashlib.sha256(data).hexdigest()
+            return VisualContext(
+                source_type=source_type,
+                image_base64=image_base64,
+                image_hash=image_hash,
+                source_id=source_id,
+            )
+        except Exception as e:
+            logger.warning(f"base64 解析失败: {e}")
+            return VisualContext()
+
+    async def _url_to_base64(self, url: str) -> Optional[str]:
+        import aiohttp
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=20) as resp:
+                    data = await resp.read()
+            return base64.b64encode(data).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"url 转 base64 失败: {e}")
+            return None
+
+    def _unique_list(self, items: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for item in items:
+            key = item.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _get_emoji_model(self):
+        """
+        这里尝试自动适配 emoji 表模型名。
+        你如果知道真实类名，建议直接改成显式导入，最稳。
+        """
+        try:
+            import src.common.database.database_model as dbm
+        except Exception:
+            return None
+
+        for name in ("Emoji", "EmojiRegisted", "EmojiRegistered", "Emojis"):
+            model = getattr(dbm, name, None)
+            if model is not None:
+                return model
+
+        return None

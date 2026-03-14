@@ -39,8 +39,8 @@ class RecentImageSearchTool(BaseTool):
     name = "recent_image_search"
     description = (
         "当用户的问题与图片有关时使用，例如“这是谁”“这是什么梗”“这图出自哪里”。"
-        "该工具会自动读取当前消息图片或当前用户最近发送的图片，进行视觉分析；"
-        "如果未找到图片，则自动降级为普通联网搜索。"
+        "该工具会自动读取当前消息图片、当前用户最近发送的图片或表情包，进行视觉分析；"
+        "如果未找到可用视觉资源，则自动降级为普通联网搜索。"
     )
     parameters = [
         ("question", ToolParamType.STRING, "用户提出的问题", True, None),
@@ -57,13 +57,13 @@ class RecentImageSearchTool(BaseTool):
 
         try:
             resolver = ImageResolverService(self)
-            image_base64 = await resolver.resolve_image_for_query()
+            visual = await resolver.resolve_visual_context_for_query()
 
             search = SearchService(self)
 
-            # 没找到图：自动降级到普通搜索
-            if not image_base64:
-                logger.info("未找到可用图片，自动降级到普通搜索")
+            # 没找到视觉资源：自动降级到普通搜索
+            if visual.source_type == "none":
+                logger.info("未找到可用视觉资源，自动降级到普通搜索")
                 raw_result = await search.search(question=question)
                 output_mode = self.get_config("search.output_mode", "brief")
                 result = format_search_result(question, raw_result, output_mode)
@@ -72,9 +72,24 @@ class RecentImageSearchTool(BaseTool):
                     "content": result
                 }
 
-            # 找到图：先视觉分析，再搜索
-            vision = VisionService(self)
-            image_context = await vision.analyze_image_base64(image_base64, question)
+            logger.info(
+                f"命中视觉资源 source_type={visual.source_type}, "
+                f"file_path={visual.file_path}, source_id={visual.source_id}"
+            )
+
+            image_context = ""
+
+            # 优先使用原图走视觉分析
+            if visual.image_base64:
+                vision = VisionService(self)
+                image_context = await vision.analyze_image_base64(
+                    visual.image_base64,
+                    question,
+                )
+
+            # 如果没有原图分析结果，但有文本提示，就退回文本提示
+            if not image_context and visual.text_hint:
+                image_context = visual.text_hint
 
             raw_result = await search.search(
                 question=question,

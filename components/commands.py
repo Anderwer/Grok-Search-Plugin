@@ -26,12 +26,30 @@ class SearchCommand(BaseCommand):
 
         try:
             image_context = ""
+
             if self.get_config("vision.enabled", True):
                 resolver = ImageResolverService(self)
-                image_base64 = await resolver.resolve_image_for_query()
-                if image_base64:
-                    vision = VisionService(self)
-                    image_context = await vision.analyze_image_base64(image_base64, question)
+                visual = await resolver.resolve_visual_context_for_query()
+
+                if visual.source_type == "none":
+                    logger.info("未找到可用视觉资源，命令模式自动降级到普通搜索")
+                else:
+                    logger.info(
+                        f"命令模式命中视觉资源 source_type={visual.source_type}, "
+                        f"file_path={visual.file_path}"
+                    )
+
+                    # 优先使用原图走视觉分析
+                    if visual.image_base64:
+                        vision = VisionService(self)
+                        image_context = await vision.analyze_image_base64(
+                            visual.image_base64,
+                            question,
+                        )
+
+                    # 如果没分析出内容，退回 text_hint
+                    if not image_context and visual.text_hint:
+                        image_context = visual.text_hint
 
             search_service = SearchService(self)
             raw_result = await search_service.search(

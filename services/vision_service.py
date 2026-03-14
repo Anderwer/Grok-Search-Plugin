@@ -16,6 +16,7 @@ class VisionService:
         if not image_base64:
             return ""
 
+        logger.info(f"开始视觉分析 source image len={len(image_base64)}")
         image_hash = self.cache.calc_hash_from_base64(image_base64)
         cached = self.cache.get_cached_analysis(image_hash)
         if cached:
