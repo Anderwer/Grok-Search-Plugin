@@ -123,6 +123,11 @@ class GrokSearchPlugin(BasePlugin):
                 default="brief",
                 description="输出模式：brief / structured / raw"
             ),
+            "enable_command": ConfigField(
+                type=bool,
+                default=True,
+                description="是否启用 /search 手动搜索命令"
+            ),
         },
         "prompt": {
             "system_prompt": ConfigField(
@@ -206,8 +211,12 @@ class GrokSearchPlugin(BasePlugin):
     }
 
     def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
-        return [
+        components: List[Tuple[ComponentInfo, Type]] = [
             (GroundedSearchTool.get_tool_info(), GroundedSearchTool),
             (RecentImageSearchTool.get_tool_info(), RecentImageSearchTool),
-            (SearchCommand.get_command_info(), SearchCommand),
         ]
+
+        if self.get_config("search.enable_command", True):
+            components.append((SearchCommand.get_command_info(), SearchCommand))
+
+        return components

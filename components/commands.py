@@ -20,6 +20,10 @@ class SearchCommand(BaseCommand):
         question = (self.matched_groups or {}).get("question", "")
         question = str(question).strip()
 
+        if not self.get_config("search.enable_command", True):
+            await self.send_text("当前已禁用 /search 指令。")
+            return True, None, True
+
         if not question:
             await self.send_text("请输入要搜索的内容，例如：/search 今日新闻")
             return True, None, True
@@ -67,10 +71,20 @@ class SearchCommand(BaseCommand):
                 image_context=image_context,
             )
 
-            output_mode = self.get_config("search.output_mode", "brief")
+            output_mode = str(self.get_config("search.output_mode", "brief") or "brief")
             result = format_search_result(question, raw_result, output_mode)
 
-            max_output_length = self.get_config("search.max_output_length", 1200)
+            max_output_length_config = self.get_config("search.max_output_length", 1200)
+            if isinstance(max_output_length_config, int):
+                max_output_length = max_output_length_config
+            elif (
+                isinstance(max_output_length_config, str)
+                and max_output_length_config.strip().isdigit()
+            ):
+                max_output_length = int(max_output_length_config.strip())
+            else:
+                max_output_length = 1200
+
             if len(result) > max_output_length:
                 result = result[:max_output_length] + "\n\n（内容过长，已截断）"
 

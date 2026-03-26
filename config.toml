@@ -30,6 +30,9 @@ temperature = 0.2
 # 搜索配置
 [search]
 
+# 是否启用 /search 手动搜索命令
+enable_command = true
+
 # 搜索归纳方向，建议强调热点、更新、事实性和时效性
 direction = "请优先关注近期热点、互联网讨论、模型更新、版本变化、公告、新闻和事实准确性。"
 
